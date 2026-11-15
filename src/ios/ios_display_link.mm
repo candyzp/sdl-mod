@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 // Geometry Dash ships CCDirectorCaller inside the game executable. Its
 // Objective-C class is available through the runtime, but it is not exported
@@ -133,13 +134,7 @@ static void refresh_debug_overlay(id self) {
         : @"not received";
 
     s_debugOverlayLabel.text = [NSString stringWithFormat:
-        @"SDL iOS DEBUG\n"
-         "Scheduler: %@\n"
-         "CADisplayLink: %@\n"
-         "Callback FPS: %.1f\n"
-         "Target FPS: %ld\n"
-         "Callbacks: %llu  Forwarded: %llu\n"
-         "Last callback: %@",
+        @"SDL iOS DEBUG\nScheduler: %@\nCADisplayLink: %@\nCallback FPS: %.1f\nTarget FPS: %ld\nCallbacks: %llu  Forwarded: %llu\nLast callback: %@",
         schedulerState,
         hasLink ? @"ATTACHED" : @"NONE",
         s_measuredCallbackFPS,
