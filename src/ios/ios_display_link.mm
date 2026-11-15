@@ -116,7 +116,7 @@ static void ios_display_link_set_animation_interval(id self, SEL, double interva
     apply_preferred_frame_rate(self);
 }
 
-static id c_shared_director_caller() {
+static id c_shared_director_caller(id, SEL) {
     if (s_sharedDisplayLinkCaller == nil) {
         if (s_displayLinkCallerClass == Nil) {
             return nil;
@@ -132,7 +132,7 @@ static id c_shared_director_caller() {
     return s_sharedDisplayLinkCaller;
 }
 
-static void c_destroy_director_caller() {
+static void c_destroy_director_caller(id, SEL) {
     if (s_sharedDisplayLinkCaller != nil) {
         ios_display_link_stop(s_sharedDisplayLinkCaller, nullptr);
         [s_sharedDisplayLinkCaller release];
@@ -172,7 +172,8 @@ $execute {
     s_displayLinkCallerClass = objc_allocateClassPair(
         directorCallerClass, "SDLModIOSDisplayLinkCaller", 0
     );
-    if (s_displayLinkCallerClass == Nil) {
+    const bool needsRegistration = s_displayLinkCallerClass != Nil;
+    if (!needsRegistration) {
         // A second registration can occur during unusual loader/reload paths.
         s_displayLinkCallerClass = objc_getClass("SDLModIOSDisplayLinkCaller");
     }
@@ -181,21 +182,32 @@ $execute {
         return;
     }
 
-    const bool methodsAdded =
-        class_addMethod(s_displayLinkCallerClass, @selector(doCaller:),
-                        reinterpret_cast<IMP>(&ios_display_link_do_caller), "v@:@") &&
-        class_addMethod(s_displayLinkCallerClass, @selector(startMainLoop),
-                        reinterpret_cast<IMP>(&ios_display_link_start), "v@:") &&
-        class_addMethod(s_displayLinkCallerClass, @selector(stopMainLoop),
-                        reinterpret_cast<IMP>(&ios_display_link_stop), "v@:") &&
-        class_addMethod(s_displayLinkCallerClass, @selector(setAnimationInterval:),
-                        reinterpret_cast<IMP>(&ios_display_link_set_animation_interval), "v@:d");
+    const bool doCallerAdded = class_addMethod(
+        s_displayLinkCallerClass, @selector(doCaller:),
+        reinterpret_cast<IMP>(&ios_display_link_do_caller), "v@:@"
+    );
+    const bool startAdded = class_addMethod(
+        s_displayLinkCallerClass, @selector(startMainLoop),
+        reinterpret_cast<IMP>(&ios_display_link_start), "v@:"
+    );
+    const bool stopAdded = class_addMethod(
+        s_displayLinkCallerClass, @selector(stopMainLoop),
+        reinterpret_cast<IMP>(&ios_display_link_stop), "v@:"
+    );
+    const bool intervalAdded = class_addMethod(
+        s_displayLinkCallerClass, @selector(setAnimationInterval:),
+        reinterpret_cast<IMP>(&ios_display_link_set_animation_interval), "v@:d"
+    );
 
-    if (!class_isMetaClass(object_getClass(s_displayLinkCallerClass))) {
+    if (needsRegistration) {
+        if (!(doCallerAdded && startAdded && stopAdded && intervalAdded)) {
+            geode::log::error("SDL iOS port: failed to install runtime display-link methods");
+            return;
+        }
         objc_registerClassPair(s_displayLinkCallerClass);
     }
 
-    if (!methodsAdded) {
+    if (!(doCallerAdded && startAdded && stopAdded && intervalAdded)) {
         geode::log::error("SDL iOS port: failed to install runtime display-link methods");
         return;
     }
