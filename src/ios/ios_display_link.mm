@@ -4,6 +4,7 @@
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
 
+#include <algorithm>
 #include <cmath>
 
 @interface IOSDisplayLinkCaller : NSObject {
