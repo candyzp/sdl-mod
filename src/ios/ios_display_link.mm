@@ -9,6 +9,18 @@
 #include <cmath>
 #include <cstdint>
 
+// A separate transparent window keeps the debug panel above Geometry Dash's
+// EAGL view. Returning nil from hitTest makes this window pass every touch
+// through to the game window underneath.
+@interface SDLModPassthroughWindow : UIWindow
+@end
+
+@implementation SDLModPassthroughWindow
+- (UIView*)hitTest:(CGPoint)point withEvent:(UIEvent*)event {
+    return nil;
+}
+@end
+
 // Geometry Dash ships CCDirectorCaller inside the game executable. Its
 // Objective-C class is available through the runtime, but it is not exported
 // as a link-time class symbol. Build a runtime subclass so this mod never
@@ -26,7 +38,9 @@ static char s_displayLinkKey;
 static char s_animationIntervalKey;
 
 static UILabel* s_debugOverlayLabel = nil;
+static SDLModPassthroughWindow* s_debugOverlayWindow = nil;
 static bool s_debugOverlayEnabled = true;
+static bool s_debugSceneWarningLogged = false;
 static bool s_schedulerStarted = false;
 static bool s_schedulerStartFailed = false;
 static CFTimeInterval s_debugSampleStart = 0.0;
@@ -59,19 +73,39 @@ static NSInteger target_frame_rate(id self) {
     return std::max<NSInteger>(1, fps);
 }
 
-static UIWindow* debug_overlay_window() {
+static UIWindowScene* debug_overlay_scene() {
     UIApplication* application = [UIApplication sharedApplication];
-    UIWindow* window = application.keyWindow;
-    if (window != nil && !window.hidden && window.alpha > 0.0) {
-        return window;
-    }
+    UIWindowScene* foregroundInactiveScene = nil;
 
-    for (UIWindow* candidate in application.windows) {
-        if (!candidate.hidden && candidate.alpha > 0.0) {
-            return candidate;
+    if (@available(iOS 13.0, *)) {
+        for (UIScene* scene in application.connectedScenes) {
+            if (![scene isKindOfClass:[UIWindowScene class]]) {
+                continue;
+            }
+
+            UIWindowScene* windowScene = (UIWindowScene*)scene;
+            if (windowScene.activationState == UISceneActivationStateForegroundActive) {
+                return windowScene;
+            }
+            if (windowScene.activationState == UISceneActivationStateForegroundInactive) {
+                foregroundInactiveScene = windowScene;
+            }
         }
     }
-    return nil;
+
+    return foregroundInactiveScene;
+}
+
+static void destroy_debug_overlay_window() {
+    [s_debugOverlayLabel removeFromSuperview];
+    s_debugOverlayLabel = nil;
+
+    if (s_debugOverlayWindow != nil) {
+        s_debugOverlayWindow.hidden = YES;
+        s_debugOverlayWindow.rootViewController = nil;
+        [s_debugOverlayWindow release];
+        s_debugOverlayWindow = nil;
+    }
 }
 
 static void ensure_debug_overlay() {
@@ -79,35 +113,72 @@ static void ensure_debug_overlay() {
         return;
     }
 
-    UIWindow* window = debug_overlay_window();
-    if (window == nil) {
+    UIWindowScene* scene = debug_overlay_scene();
+    if (scene == nil) {
+        if (!s_debugSceneWarningLogged) {
+            geode::log::warn("SDL iOS debug overlay: no foreground UIWindowScene is available yet");
+            s_debugSceneWarningLogged = true;
+        }
         return;
     }
 
-    if (s_debugOverlayLabel != nil && s_debugOverlayLabel.superview == window) {
+    if (s_debugOverlayWindow != nil && s_debugOverlayWindow.windowScene != scene) {
+        destroy_debug_overlay_window();
+    }
+
+    if (s_debugOverlayWindow == nil) {
+        s_debugOverlayWindow = [[SDLModPassthroughWindow alloc] initWithWindowScene:scene];
+        s_debugOverlayWindow.windowLevel = UIWindowLevelNormal + 1.0;
+        s_debugOverlayWindow.backgroundColor = [UIColor clearColor];
+        s_debugOverlayWindow.opaque = NO;
+
+        UIViewController* controller = [[UIViewController alloc] init];
+        controller.view.backgroundColor = [UIColor clearColor];
+        controller.view.opaque = NO;
+        controller.view.userInteractionEnabled = NO;
+        s_debugOverlayWindow.rootViewController = controller;
+        [controller release];
+
+        s_debugOverlayWindow.hidden = NO;
+        geode::log::info("SDL iOS debug overlay: created transparent pass-through window");
+    }
+
+    s_debugOverlayWindow.hidden = NO;
+    UIView* hostView = s_debugOverlayWindow.rootViewController.view;
+    if (hostView == nil) {
         return;
     }
 
-    [s_debugOverlayLabel removeFromSuperview];
-    UILabel* label = [[UILabel alloc] initWithFrame:CGRectZero];
-    label.numberOfLines = 0;
-    label.font = [UIFont monospacedSystemFontOfSize:10.5 weight:UIFontWeightSemibold];
-    label.textColor = [UIColor whiteColor];
-    label.backgroundColor = [UIColor colorWithWhite:0.02 alpha:0.84];
-    label.textAlignment = NSTextAlignmentLeft;
-    label.userInteractionEnabled = NO;
-    label.layer.cornerRadius = 8.0;
-    label.layer.masksToBounds = YES;
-    label.lineBreakMode = NSLineBreakByClipping;
-    label.frame = CGRectMake(
-        10.0,
-        window.safeAreaInsets.top + 8.0,
-        242.0,
-        112.0
-    );
-    s_debugOverlayLabel = label;
-    [window addSubview:label];
-    [label release];
+    if (s_debugOverlayLabel != nil && s_debugOverlayLabel.superview != hostView) {
+        [s_debugOverlayLabel removeFromSuperview];
+        s_debugOverlayLabel = nil;
+    }
+
+    if (s_debugOverlayLabel == nil) {
+        UILabel* label = [[UILabel alloc] initWithFrame:CGRectZero];
+        label.numberOfLines = 0;
+        label.font = [UIFont monospacedSystemFontOfSize:10.5 weight:UIFontWeightSemibold];
+        label.textColor = [UIColor whiteColor];
+        label.backgroundColor = [UIColor colorWithWhite:0.02 alpha:0.88];
+        label.textAlignment = NSTextAlignmentLeft;
+        label.userInteractionEnabled = NO;
+        label.layer.cornerRadius = 8.0;
+        label.layer.masksToBounds = YES;
+        label.lineBreakMode = NSLineBreakByClipping;
+        label.autoresizingMask = UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleBottomMargin;
+        label.frame = CGRectMake(
+            10.0,
+            hostView.safeAreaInsets.top + 8.0,
+            252.0,
+            116.0
+        );
+        s_debugOverlayLabel = label;
+        [hostView addSubview:label];
+        [label release];
+        geode::log::info("SDL iOS debug overlay: label attached to overlay window");
+    }
+
+    [hostView bringSubviewToFront:s_debugOverlayLabel];
 }
 
 static void refresh_debug_overlay(id self) {
@@ -278,8 +349,7 @@ static void c_destroy_director_caller(id, SEL) {
         [s_sharedDisplayLinkCaller release];
         s_sharedDisplayLinkCaller = nil;
     }
-    [s_debugOverlayLabel removeFromSuperview];
-    s_debugOverlayLabel = nil;
+    destroy_debug_overlay_window();
     s_schedulerStarted = false;
 }
 
