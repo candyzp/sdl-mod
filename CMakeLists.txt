@@ -71,3 +71,13 @@ else()
 endif()
 
 setup_geode_mod(${PROJECT_NAME})
+
+# Geode 5.11.2's generated bindings use FMOD types without including FMOD's
+# declarations in GeneratedSource.cpp. Force-include the SDK's public FMOD
+# compatibility header for the generated bindings target (iOS and other
+# targets), matching the SDK's expected build environment.
+if (TARGET GeodeBindings)
+    target_compile_options(GeodeBindings PRIVATE
+        "SHELL:-include Geode/fmod/fmod.h"
+    )
+endif()
