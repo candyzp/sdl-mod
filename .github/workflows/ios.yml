@@ -1,0 +1,32 @@
+name: Build SDL Mod iOS
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - ios-2.2081-port
+
+permissions:
+  contents: read
+
+jobs:
+  build-ios:
+    name: Geometry Dash 2.2081 iOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build iOS mod
+        id: build
+        uses: geode-sdk/build-geode-mod@main
+        with:
+          sdk: given
+          target: iOS
+          build-config: RelWithDebInfo
+
+      - name: Upload iOS package
+        uses: actions/upload-artifact@v7
+        with:
+          name: SDL-Mod-iOS-2.2081
+          path: ${{ steps.build.outputs.build-output }}/*.geode
+          if-no-files-found: error
