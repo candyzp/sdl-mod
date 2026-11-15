@@ -7,7 +7,20 @@
 #include <algorithm>
 #include <cmath>
 
-@interface IOSDisplayLinkCaller : NSObject {
+//
+// Geometry Dash's iOS Cocos2d runtime already owns UIApplication, its EAGLView,
+// and its OpenGL ES context. Keep that ownership intact. This adapter only
+// replaces the display-link object and delegates each tick back to the
+// original CCDirectorCaller::doCaller: implementation, which retains the
+// game's native per-frame context setup and main-loop behavior.
+//
+
+@interface CCDirectorCaller : NSObject
++ (id)sharedDirectorCaller;
+- (void)doCaller:(id)sender;
+@end
+
+@interface IOSDisplayLinkCaller : CCDirectorCaller {
     CADisplayLink* m_displayLink;
     double m_animationInterval;
 }
@@ -15,8 +28,9 @@
 + (id)sharedDirectorCaller;
 - (void)setAnimationInterval:(double)interval;
 - (void)startMainLoop;
+- (void)stopMainLoop;
 - (void)end;
-- (void)onDisplayLink:(CADisplayLink*)displayLink;
+- (void)applyPreferredFrameRate;
 
 @end
 
@@ -82,7 +96,7 @@
     }
 
     m_displayLink = [[CADisplayLink displayLinkWithTarget:self
-                                                selector:@selector(onDisplayLink:)] retain];
+                                                selector:@selector(doCaller:)] retain];
     if (m_displayLink == nil) {
         geode::log::error("SDL iOS port: failed to create CADisplayLink");
         return;
@@ -98,16 +112,7 @@
     );
 }
 
-- (void)onDisplayLink:(CADisplayLink*)displayLink {
-    auto* director = cocos2d::CCDirector::sharedDirector();
-    if (director == nullptr) {
-        return;
-    }
-
-    static_cast<cocos2d::CCDisplayLinkDirector*>(director)->mainLoop();
-}
-
-- (void)end {
+- (void)stopMainLoop {
     if (m_displayLink != nil) {
         [m_displayLink invalidate];
         [m_displayLink release];
@@ -115,8 +120,12 @@
     }
 }
 
+- (void)end {
+    [self stopMainLoop];
+}
+
 - (void)dealloc {
-    [self end];
+    [self stopMainLoop];
     [super dealloc];
 }
 
