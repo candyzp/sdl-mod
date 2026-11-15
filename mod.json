@@ -1,15 +1,23 @@
 {
 	"geode": "6.0.0-alpha.1",
 	"gd": {
-		"mac": "2.2091"
+		"mac": "2.2091",
+		"ios": "2.2081"
 	},
 	"id": "zmx.sdl",
 	"name": "SDL Mod",
-	"version": "v1.0.6",
+	"version": "v1.0.7",
 	"developer": "zmx",
-	"description": "Full rewrite of the windowing layer on macOS",
+	"description": "SDL-based windowing on macOS with an iOS-native display-link scheduler port.",
 	"early-load": true,
-	"tags": ["interface", "bugfix", "enhancement", "universal", "performance", "offline"],
+	"tags": [
+		"interface",
+		"bugfix",
+		"enhancement",
+		"universal",
+		"performance",
+		"offline"
+	],
 	"links": {
 		"source": "https://codeberg.org/qimiko/sdl-mod"
 	},
@@ -21,13 +29,13 @@
 		"disable-vsync": {
 			"type": "bool",
 			"name": "Disable VSync",
-			"description": "Allows for <cj>manual control</c> of frame timing.",
+			"description": "macOS only. Allows manual control of frame timing.",
 			"default": false
 		},
 		"uncap-framerate": {
 			"type": "bool",
 			"name": "Disable Framerate Cap",
-			"description": "Removes the <cl>framerate cap</c>. This has a <co>significant</c> performance cost!",
+			"description": "macOS only. Removes the framerate cap and may significantly increase CPU usage.",
 			"default": false,
 			"enable-if": "disable-vsync"
 		},
@@ -108,8 +116,8 @@
 			"type": "float",
 			"name": "Controller Mouse Controls Deadzone",
 			"description": "Determines the minimum percentage of the joystick that has to be pressed in order to move the cursor. Increase this value if you experience drift while using a controller.",
-			"min": 0.0,
-			"max": 1.0,
+			"min": 0,
+			"max": 1,
 			"default": 0.1,
 			"control": {
 				"arrows": false,
@@ -123,14 +131,21 @@
 			"name": "Horizontal Scroll Speed",
 			"description": "Speed modifier for horizontal scrolling. Stacks with the vanilla scroll setting.",
 			"min": 0.5,
-			"max": 3.0,
-			"default": 1.0,
+			"max": 3,
+			"default": 1,
 			"control": {
 				"arrows": false,
 				"slider": true,
 				"slider-step": 0.01,
 				"input": true
 			}
+		},
+		"ios-native-display-link": {
+			"type": "bool",
+			"name": "Use iOS Native Display-Link Scheduler",
+			"description": "Uses CADisplayLink to drive the original Geometry Dash main loop on iOS. Keeps the native iOS application, touch input, and OpenGL ES renderer. Restart required.",
+			"default": true,
+			"requires-restart": true
 		}
 	}
 }
