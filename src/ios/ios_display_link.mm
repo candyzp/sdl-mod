@@ -24,6 +24,18 @@ static IMP s_originalDoCaller = nullptr;
 static char s_displayLinkKey;
 static char s_animationIntervalKey;
 
+static UILabel* s_debugOverlayLabel = nil;
+static bool s_debugOverlayEnabled = true;
+static bool s_schedulerStarted = false;
+static bool s_schedulerStartFailed = false;
+static CFTimeInterval s_debugSampleStart = 0.0;
+static CFTimeInterval s_debugLastOverlayUpdate = 0.0;
+static CFTimeInterval s_lastCallbackTime = 0.0;
+static uint64_t s_totalCallbacks = 0;
+static uint64_t s_forwardedCallbacks = 0;
+static uint64_t s_sampleCallbacks = 0;
+static double s_measuredCallbackFPS = 0.0;
+
 static double animation_interval(id self) {
     NSNumber* value = (NSNumber*)objc_getAssociatedObject(self, &s_animationIntervalKey);
     if (value == nil) {
@@ -37,18 +49,114 @@ static CADisplayLink* display_link(id self) {
     return (CADisplayLink*)objc_getAssociatedObject(self, &s_displayLinkKey);
 }
 
+static NSInteger target_frame_rate(id self) {
+    NSInteger fps = static_cast<NSInteger>(std::lround(1.0 / animation_interval(self)));
+    const NSInteger displayMaximum = [UIScreen mainScreen].maximumFramesPerSecond;
+    if (displayMaximum > 0) {
+        fps = std::min(fps, displayMaximum);
+    }
+    return std::max<NSInteger>(1, fps);
+}
+
+static UIWindow* debug_overlay_window() {
+    UIApplication* application = [UIApplication sharedApplication];
+    UIWindow* window = application.keyWindow;
+    if (window != nil && !window.hidden && window.alpha > 0.0) {
+        return window;
+    }
+
+    for (UIWindow* candidate in application.windows) {
+        if (!candidate.hidden && candidate.alpha > 0.0) {
+            return candidate;
+        }
+    }
+    return nil;
+}
+
+static void ensure_debug_overlay() {
+    if (!s_debugOverlayEnabled) {
+        return;
+    }
+
+    UIWindow* window = debug_overlay_window();
+    if (window == nil) {
+        return;
+    }
+
+    if (s_debugOverlayLabel != nil && s_debugOverlayLabel.superview == window) {
+        return;
+    }
+
+    [s_debugOverlayLabel removeFromSuperview];
+    UILabel* label = [[UILabel alloc] initWithFrame:CGRectZero];
+    label.numberOfLines = 0;
+    label.font = [UIFont monospacedSystemFontOfSize:10.5 weight:UIFontWeightSemibold];
+    label.textColor = [UIColor whiteColor];
+    label.backgroundColor = [UIColor colorWithWhite:0.02 alpha:0.84];
+    label.textAlignment = NSTextAlignmentLeft;
+    label.userInteractionEnabled = NO;
+    label.layer.cornerRadius = 8.0;
+    label.layer.masksToBounds = YES;
+    label.lineBreakMode = NSLineBreakByClipping;
+    label.frame = CGRectMake(
+        10.0,
+        window.safeAreaInsets.top + 8.0,
+        242.0,
+        112.0
+    );
+    s_debugOverlayLabel = label;
+    [window addSubview:label];
+    [label release];
+}
+
+static void refresh_debug_overlay(id self) {
+    if (!s_debugOverlayEnabled) {
+        return;
+    }
+
+    ensure_debug_overlay();
+    if (s_debugOverlayLabel == nil) {
+        return;
+    }
+
+    const bool hasLink = display_link(self) != nil;
+    NSString* schedulerState = s_schedulerStartFailed
+        ? @"FAILED"
+        : (!s_schedulerStarted ? @"STOPPED"
+           : (s_totalCallbacks == 0 ? @"WAITING" : @"ACTIVE"));
+    const CFTimeInterval now = CACurrentMediaTime();
+    const double callbackAge = s_lastCallbackTime > 0.0
+        ? std::max(0.0, now - s_lastCallbackTime)
+        : -1.0;
+    NSString* callbackAgeText = callbackAge >= 0.0
+        ? [NSString stringWithFormat:@"%.2fs ago", callbackAge]
+        : @"not received";
+
+    s_debugOverlayLabel.text = [NSString stringWithFormat:
+        @"SDL iOS DEBUG\n"
+         "Scheduler: %@\n"
+         "CADisplayLink: %@\n"
+         "Callback FPS: %.1f\n"
+         "Target FPS: %ld\n"
+         "Callbacks: %llu  Forwarded: %llu\n"
+         "Last callback: %@",
+        schedulerState,
+        hasLink ? @"ATTACHED" : @"NONE",
+        s_measuredCallbackFPS,
+        static_cast<long>(target_frame_rate(self)),
+        static_cast<unsigned long long>(s_totalCallbacks),
+        static_cast<unsigned long long>(s_forwardedCallbacks),
+        callbackAgeText
+    ];
+}
+
 static void apply_preferred_frame_rate(id self) {
     CADisplayLink* link = display_link(self);
     if (link == nil) {
         return;
     }
 
-    NSInteger fps = static_cast<NSInteger>(std::lround(1.0 / animation_interval(self)));
-    const NSInteger displayMaximum = [UIScreen mainScreen].maximumFramesPerSecond;
-    if (displayMaximum > 0) {
-        fps = std::min(fps, displayMaximum);
-    }
-    fps = std::max<NSInteger>(1, fps);
+    const NSInteger fps = target_frame_rate(self);
 
     if (@available(iOS 15.0, *)) {
         const CGFloat preferred = static_cast<CGFloat>(fps);
@@ -64,35 +172,65 @@ static void ios_display_link_do_caller(id self, SEL selector, id sender) {
         return;
     }
 
+    const CFTimeInterval now = CACurrentMediaTime();
+    ++s_totalCallbacks;
+    ++s_sampleCallbacks;
+    s_lastCallbackTime = now;
+
+    if (s_debugSampleStart <= 0.0) {
+        s_debugSampleStart = now;
+    } else {
+        const CFTimeInterval elapsed = now - s_debugSampleStart;
+        if (elapsed >= 1.0) {
+            s_measuredCallbackFPS = static_cast<double>(s_sampleCallbacks) / elapsed;
+            s_sampleCallbacks = 0;
+            s_debugSampleStart = now;
+        }
+    }
+
     using OriginalDoCaller = void (*)(id, SEL, id);
     reinterpret_cast<OriginalDoCaller>(s_originalDoCaller)(self, selector, sender);
+    ++s_forwardedCallbacks;
+
+    // UIKit text is refreshed at most four times per second, not on every frame.
+    if (s_debugLastOverlayUpdate <= 0.0 || now - s_debugLastOverlayUpdate >= 0.25) {
+        refresh_debug_overlay(self);
+        s_debugLastOverlayUpdate = now;
+    }
 }
 
 static void ios_display_link_stop(id self, SEL) {
+    s_schedulerStarted = false;
     CADisplayLink* link = display_link(self);
     if (link != nil) {
         [link invalidate];
         objc_setAssociatedObject(self, &s_displayLinkKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
+    refresh_debug_overlay(self);
 }
 
 static void ios_display_link_start(id self, SEL) {
     ios_display_link_stop(self, nullptr);
+    s_schedulerStartFailed = false;
 
     CADisplayLink* link = [CADisplayLink displayLinkWithTarget:self
                                                      selector:@selector(doCaller:)];
     if (link == nil) {
+        s_schedulerStartFailed = true;
         geode::log::error("SDL iOS port: failed to create CADisplayLink");
+        refresh_debug_overlay(self);
         return;
     }
 
     objc_setAssociatedObject(self, &s_displayLinkKey, link, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     apply_preferred_frame_rate(self);
     [link addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+    s_schedulerStarted = true;
+    refresh_debug_overlay(self);
 
     geode::log::info(
         "SDL iOS port: native CADisplayLink scheduler started ({} FPS target)",
-        static_cast<int>(std::lround(1.0 / animation_interval(self)))
+        static_cast<int>(target_frame_rate(self))
     );
 }
 
@@ -122,6 +260,13 @@ static id c_shared_director_caller(id, SEL) {
             return nil;
         }
         s_sharedDisplayLinkCaller = [[s_displayLinkCallerClass alloc] init];
+        s_totalCallbacks = 0;
+        s_forwardedCallbacks = 0;
+        s_sampleCallbacks = 0;
+        s_measuredCallbackFPS = 0.0;
+        s_debugSampleStart = 0.0;
+        s_lastCallbackTime = 0.0;
+        s_debugLastOverlayUpdate = 0.0;
         objc_setAssociatedObject(
             s_sharedDisplayLinkCaller,
             &s_animationIntervalKey,
@@ -138,9 +283,14 @@ static void c_destroy_director_caller(id, SEL) {
         [s_sharedDisplayLinkCaller release];
         s_sharedDisplayLinkCaller = nil;
     }
+    [s_debugOverlayLabel removeFromSuperview];
+    s_debugOverlayLabel = nil;
+    s_schedulerStarted = false;
 }
 
 $execute {
+    s_debugOverlayEnabled = geode::Mod::get()->getSettingValue<bool>("ios-debug-overlay");
+
     if (!geode::Mod::get()->getSettingValue<bool>("ios-native-display-link")) {
         geode::log::info("SDL iOS port: native display-link scheduler disabled by setting");
         return;
