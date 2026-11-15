@@ -146,6 +146,13 @@
 			"description": "Uses CADisplayLink to drive the original Geometry Dash main loop on iOS. Keeps the native iOS application, touch input, and OpenGL ES renderer. Restart required.",
 			"default": true,
 			"requires-restart": true
+		},
+		"ios-debug-overlay": {
+			"type": "bool",
+			"name": "Show iOS Scheduler Debug Overlay",
+			"description": "Displays live CADisplayLink callback FPS, target FPS, callback count, and forwarded game-loop calls. Restart required.",
+			"default": true,
+			"requires-restart": true
 		}
 	}
 }
